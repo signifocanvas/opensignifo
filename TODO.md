@@ -4,37 +4,41 @@ This document is the authoritative task list for building opensignifo from scrat
 Each phase maps directly to a section in `ARCHITECTURE.md`. Complete phases in order —
 later phases depend on earlier ones.
 
+The repo ships source code. Everything that touches `~/.opensignifo/` or
+`/usr/local/bin/` on the user's machine is the responsibility of `install.sh` (Phase 14),
+not of the developer directly.
+
+Repo layout produced by this roadmap:
+
+```
+opensignifo/
+├── ARCHITECTURE.md
+├── LICENSE
+├── TODO.md
+├── install.sh
+└── app/
+    ├── main.php
+    ├── Logger.php
+    ├── Config.php
+    ├── Budget.php
+    ├── DeepSeekClient.php
+    ├── PromptBuilder.php
+    ├── GitIgnore.php
+    ├── ProjectScanner.php
+    ├── State.php
+    ├── CycleRouter.php
+    ├── SuggestionWriter.php
+    ├── OptionB.php
+    └── OptionC.php
+```
+
 ---
 
-## Phase 1 — Project Scaffolding
-
-Set up the installation layout and the CLI entry point before writing any logic.
-
-- [ ] Create `~/.opensignifo/` directory structure:
-  - [ ] `~/.opensignifo/app/` — PHP source files live here
-  - [ ] `~/.opensignifo/projects/` — per-project prompt overrides
-- [ ] Create placeholder `~/.opensignifo/OPENSIGNIFO.md` with a starter global agent prompt
-- [ ] Create `~/.opensignifo/config.json` with example structure (see ARCHITECTURE §3):
-  - `projects_root`, `daily_budget_usd`, `projects[]` with `name`, `active`, `maintenance_token`
-- [ ] Create empty `~/.opensignifo/budget.json` (`{}`)
-- [ ] Create empty `~/.opensignifo/state.json` (`{}`)
-- [ ] Create `/usr/local/bin/opensignifo` shell wrapper:
-  ```bash
-  #!/bin/bash
-  php ~/.opensignifo/app/main.php "$@"
-  ```
-- [ ] `chmod +x /usr/local/bin/opensignifo`
-- [ ] Verify `opensignifo --help` (or any arg) reaches `main.php` without error
-
-**Acceptance:** Running `opensignifo` drops into `main.php` (even if it's just `<?php echo "ok\n";`).
-
----
-
-## Phase 2 — Logger.php
+## Phase 1 — Logger.php
 
 Build console output first — every subsequent phase depends on being able to see what's happening.
 
-- [ ] Create `~/.opensignifo/app/Logger.php`
+- [ ] Create `app/Logger.php`
 - [ ] Implement `Logger::log(string $message): void`
   - Prefix every line with `[HH:MM:SS]` using `date('H:i:s')`
   - Write to `STDOUT` (not `STDERR`)
@@ -48,9 +52,9 @@ Build console output first — every subsequent phase depends on being able to s
 
 ---
 
-## Phase 3 — Config.php + config.json
+## Phase 2 — Config.php
 
-- [ ] Create `~/.opensignifo/app/Config.php`
+- [ ] Create `app/Config.php`
 - [ ] Implement `Config::load(): array` — reads and JSON-decodes `~/.opensignifo/config.json`
 - [ ] Validate required top-level keys: `projects_root`, `daily_budget_usd`, `projects`
 - [ ] Expand `~` in `projects_root` to the real home directory path
@@ -65,11 +69,11 @@ Build console output first — every subsequent phase depends on being able to s
 
 ---
 
-## Phase 4 — Budget.php + budget.json
+## Phase 3 — Budget.php
 
 Budget enforcement must run before every API call.
 
-- [ ] Create `~/.opensignifo/app/Budget.php`
+- [ ] Create `app/Budget.php`
 - [ ] Implement `Budget::check(float $dailyLimit): void`
   - Read `~/.opensignifo/budget.json`
   - Get today's date as `YYYY-MM-DD`
@@ -85,11 +89,11 @@ Budget enforcement must run before every API call.
 
 ---
 
-## Phase 5 — DeepSeekClient.php
+## Phase 4 — DeepSeekClient.php
 
 The API wrapper. All calls in the whole system go through this one class.
 
-- [ ] Create `~/.opensignifo/app/DeepSeekClient.php`
+- [ ] Create `app/DeepSeekClient.php`
 - [ ] Store pricing constants exactly as in ARCHITECTURE §10:
   ```php
   const V4_FLASH_INPUT_CACHE_HIT  = 0.028;
@@ -122,11 +126,11 @@ The API wrapper. All calls in the whole system go through this one class.
 
 ---
 
-## Phase 6 — PromptBuilder.php
+## Phase 5 — PromptBuilder.php
 
 Assembles the stable system prompt once per project per session.
 
-- [ ] Create `~/.opensignifo/app/PromptBuilder.php`
+- [ ] Create `app/PromptBuilder.php`
 - [ ] Implement `PromptBuilder::build(string $projectName, string $projectRoot): string`
 - [ ] Layer 1: always read `~/.opensignifo/OPENSIGNIFO.md` and prepend it
 - [ ] Layer 2: if `~/.opensignifo/projects/{projectName}/context.md` exists, append it
@@ -143,9 +147,9 @@ Assembles the stable system prompt once per project per session.
 
 ---
 
-## Phase 7 — GitIgnore.php
+## Phase 6 — GitIgnore.php
 
-- [ ] Create `~/.opensignifo/app/GitIgnore.php`
+- [ ] Create `app/GitIgnore.php`
 - [ ] Implement `GitIgnore::load(string $projectRoot): self` — reads `{projectRoot}/.gitignore` if it exists
 - [ ] Implement `GitIgnore::matches(string $relativePath): bool`
   - Supports glob patterns (`*.log`, `build/`, `vendor/`)
@@ -157,9 +161,9 @@ Assembles the stable system prompt once per project per session.
 
 ---
 
-## Phase 8 — ProjectScanner.php
+## Phase 7 — ProjectScanner.php
 
-- [ ] Create `~/.opensignifo/app/ProjectScanner.php`
+- [ ] Create `app/ProjectScanner.php`
 - [ ] Implement `ProjectScanner::scan(string $projectRoot): array`
   - Returns array of `['path' => string (absolute), 'relative' => string, 'lines' => int]`
 - [ ] Scannable extensions: `.php .js .html .css .json .txt .neon .sh .sql` (ARCHITECTURE §12)
@@ -174,12 +178,12 @@ Assembles the stable system prompt once per project per session.
 
 ---
 
-## Phase 9 — State.php + state.json
+## Phase 8 — State.php
 
 Tracks file modification times so Option C can detect changes.
 
-- [ ] Create `~/.opensignifo/app/State.php`
-- [ ] Data structure in `state.json`:
+- [ ] Create `app/State.php`
+- [ ] Data structure in `~/.opensignifo/state.json`:
   ```json
   {
     "project-1": {
@@ -203,9 +207,9 @@ Tracks file modification times so Option C can detect changes.
 
 ---
 
-## Phase 10 — CycleRouter.php
+## Phase 9 — CycleRouter.php
 
-- [ ] Create `~/.opensignifo/app/CycleRouter.php`
+- [ ] Create `app/CycleRouter.php`
 - [ ] Implement `CycleRouter::selectProject(array $activeProjects): array`
   - Filter to `active: true` entries
   - Pick the project with the lowest `maintenance_token`
@@ -220,11 +224,11 @@ Tracks file modification times so Option C can detect changes.
 
 ---
 
-## Phase 11 — SuggestionWriter.php
+## Phase 10 — SuggestionWriter.php
 
 Handles writing, naming, and rotating suggestion/review files.
 
-- [ ] Create `~/.opensignifo/app/SuggestionWriter.php`
+- [ ] Create `app/SuggestionWriter.php`
 - [ ] Implement `SuggestionWriter::writeSuggestion(string $projectRoot, string $content): string`
   - Destination: `{projectRoot}/.opensignifo/suggestions/`
   - Filename: `suggestion-{YYYY-MM-DD}-{NNN}.md` where NNN is zero-padded next sequence number
@@ -243,9 +247,9 @@ Handles writing, naming, and rotating suggestion/review files.
 
 ---
 
-## Phase 12 — OptionB.php — Deep Scan
+## Phase 11 — OptionB.php — Deep Scan
 
-- [ ] Create `~/.opensignifo/app/OptionB.php`
+- [ ] Create `app/OptionB.php`
 - [ ] Implement `OptionB::run(string $projectName, string $projectRoot, string $systemPrompt): void`
 
 ### Step B:1 — Review existing suggestions
@@ -281,9 +285,9 @@ Handles writing, naming, and rotating suggestion/review files.
 
 ---
 
-## Phase 13 — OptionC.php — Diff / Change-Driven Scan
+## Phase 12 — OptionC.php — Diff / Change-Driven Scan
 
-- [ ] Create `~/.opensignifo/app/OptionC.php`
+- [ ] Create `app/OptionC.php`
 - [ ] Implement `OptionC::run(string $projectName, string $projectRoot, string $systemPrompt): void`
 
 ### Step C:1 — Detect changed files
@@ -307,11 +311,11 @@ Handles writing, naming, and rotating suggestion/review files.
 
 ---
 
-## Phase 14 — main.php — Main Loop
+## Phase 13 — main.php — Main Loop
 
 Wire everything together into the continuous loop.
 
-- [ ] Create `~/.opensignifo/app/main.php`
+- [ ] Create `app/main.php`
 - [ ] Register `SIGINT` handler via `pcntl_signal()` (ARCHITECTURE §13):
   ```php
   pcntl_signal(SIGINT, function() {
@@ -343,29 +347,50 @@ Wire everything together into the continuous loop.
 
 ---
 
-## Phase 15 — Install Script
+## Phase 14 — install.sh
+
+The install script is the only place that touches the user's machine. All local setup lives here.
 
 - [ ] Create `install.sh` in the repo root
-- [ ] Script must:
-  - [ ] Copy `app/` source files to `~/.opensignifo/app/`
-  - [ ] Create `~/.opensignifo/projects/` if absent
-  - [ ] Write starter `~/.opensignifo/OPENSIGNIFO.md` if none exists (never overwrite)
-  - [ ] Write starter `~/.opensignifo/config.json` if none exists (never overwrite)
-  - [ ] Write empty `budget.json` and `state.json` if they don't exist
-  - [ ] Install `/usr/local/bin/opensignifo` (requires sudo or PATH-local bin dir)
-  - [ ] Print setup instructions for `DEEPSEEK_API_KEY`
-- [ ] Make `install.sh` idempotent — safe to run multiple times
+- [ ] Script must perform the following steps, in order:
 
-**Acceptance:** Running `install.sh` on a clean machine produces a working `opensignifo` command.
+  **Directory setup**
+  - [ ] Create `~/.opensignifo/app/` if it doesn't exist
+  - [ ] Create `~/.opensignifo/projects/` if it doesn't exist
+
+  **Copy source files**
+  - [ ] Copy all files from `app/` in the repo → `~/.opensignifo/app/` (overwrite on upgrade)
+
+  **Write starter data files (never overwrite existing)**
+  - [ ] Write `~/.opensignifo/OPENSIGNIFO.md` with a default global agent prompt — skip if already present
+  - [ ] Write `~/.opensignifo/config.json` with the example structure from ARCHITECTURE §3 — skip if already present
+  - [ ] Write `~/.opensignifo/budget.json` as `{}` — skip if already present
+  - [ ] Write `~/.opensignifo/state.json` as `{}` — skip if already present
+
+  **Install CLI wrapper**
+  - [ ] Write `/usr/local/bin/opensignifo`:
+    ```bash
+    #!/bin/bash
+    php ~/.opensignifo/app/main.php "$@"
+    ```
+  - [ ] `chmod +x /usr/local/bin/opensignifo`
+
+  **Post-install message**
+  - [ ] Print: `opensignifo installed. Set DEEPSEEK_API_KEY in your shell profile, then run: opensignifo`
+
+- [ ] Make the entire script idempotent — safe to run again on upgrade without losing user data
+
+**Acceptance:** Running `install.sh` on a clean machine + running it a second time both succeed. User data files are not overwritten on the second run.
 
 ---
 
-## Phase 16 — End-to-End Smoke Test
+## Phase 15 — End-to-End Smoke Test
 
 Final validation before the project is considered shippable.
 
-- [ ] Set up a minimal test project directory with a few PHP/JS files
-- [ ] Configure `config.json` with that project as `active: true`
+- [ ] Run `install.sh` on a clean machine (or clean `~/.opensignifo/`)
+- [ ] Set `DEEPSEEK_API_KEY` in the environment
+- [ ] Edit `~/.opensignifo/config.json` to point at a minimal test project with a few PHP/JS files
 - [ ] Run `opensignifo` for 2–3 full cycles
 - [ ] Verify:
   - [ ] Option B runs when `suggestions/` has < 3 files
@@ -373,7 +398,7 @@ Final validation before the project is considered shippable.
   - [ ] `maintenance_token` increments in `config.json` after each cycle
   - [ ] Budget is tracked correctly in `budget.json`
   - [ ] `state.json` correctly reflects file mtimes
-  - [ ] Log output matches ARCHITECTURE §11 format
+  - [ ] Log output matches ARCHITECTURE §11 format exactly
   - [ ] Ctrl+C exits cleanly with goodbye message
   - [ ] Suggestion files have correct YAML front matter (ARCHITECTURE §8)
 
