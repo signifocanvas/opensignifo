@@ -12,22 +12,29 @@
 
 ```
 ~/.opensignifo/
-├── config.json              # User configuration
-├── budget.json              # Daily spend tracker (auto-managed)
-├── state.json               # File mtimes, last-scan timestamps (auto-managed)
+├── OPENSIGNIFO.md               # Global CLI-level prompt — prepended to every project call
+├── config.json                  # User configuration
+├── budget.json                  # Daily spend tracker (auto-managed)
+├── state.json                   # File mtimes, last-scan timestamps (auto-managed)
+├── projects/                    # Per-project prompt overrides (optional)
+│   ├── project-1/
+│   │   └── context.md           # Project-level custom instructions
+│   └── project-2/
+│       └── context.md
 └── app/
-    ├── main.php             # Entry point — the main loop
-    ├── Config.php           # Loads and validates config.json
-    ├── Budget.php           # Budget tracking and enforcement
-    ├── State.php            # Persists file mtimes and project scan state
-    ├── ProjectScanner.php   # Discovers files, respects .gitignore
-    ├── GitIgnore.php        # Parses root-level .gitignore rules
-    ├── CycleRouter.php      # Decides Option B vs Option C per project
-    ├── OptionB.php          # Deep scan: flash bird's-eye → pro on ranges
-    ├── OptionC.php          # Diff scan: changed files → flash ranges → pro
-    ├── SuggestionWriter.php # Writes/updates/deletes .opensignifo/ md files
-    ├── DeepSeekClient.php   # All API calls, token counting, cache awareness
-    └── Logger.php           # Console log output (timestamped, like php -s)
+    ├── main.php                 # Entry point — the main loop
+    ├── Config.php               # Loads and validates config.json
+    ├── Budget.php               # Budget tracking and enforcement
+    ├── State.php                # Persists file mtimes and project scan state
+    ├── ProjectScanner.php       # Discovers files, respects .gitignore
+    ├── GitIgnore.php            # Parses root-level .gitignore rules
+    ├── CycleRouter.php          # Decides Option B vs Option C per project
+    ├── OptionB.php              # Deep scan: flash bird's-eye → pro on ranges
+    ├── OptionC.php              # Diff scan: changed files → flash ranges → pro
+    ├── SuggestionWriter.php     # Writes/updates/deletes .opensignifo/ md files
+    ├── PromptBuilder.php        # Assembles the stable system prompt per project
+    ├── DeepSeekClient.php       # All API calls, token counting, cache awareness
+    └── Logger.php               # Console log output (timestamped, like php -s)
 ```
 
 The `opensignifo` command lives at `/usr/local/bin/opensignifo`:
@@ -75,9 +82,9 @@ php ~/.opensignifo/app/main.php "$@"
 ├── sql/
 ├── src/
 ├── tests/
-├── CLAUDE.md
-├── GEMINI.md
-├── AGENTS.md
+├── CLAUDE.md                         # Primary project context (preferred)
+├── AGENTS.md                         # Fallback project context
+├── GEMINI.md                         # Fallback project context
 └── public_html/
     └── ...  (your project files)
 ```
@@ -120,6 +127,7 @@ Triggered when `suggestions/` has fewer than 3 `*.md` files.
 ### Step 1 — Review existing suggestions (v4-flash, non-thinking)
 
 For each existing `*.md` file in `suggestions/`:
+
 - Send the suggestion content + the current content of the file it references to v4-flash
 - Ask: "Has this issue been resolved or improved upon in the current file? Answer only: RESOLVED, IMPROVED, or PENDING."
 - If `RESOLVED` or `IMPROVED` → delete the suggestion file, log deletion
@@ -139,6 +147,7 @@ Build a **stable system prompt** for the project (see Section 9 on caching). Sen
 ### Step 3 — Range scan (v4-flash, non-thinking)
 
 For each file returned by Step 2 (up to the number of open suggestion slots):
+
 - Send the full file content to v4-flash
 - Ask: "Return a JSON array of line ranges worth deep analysis: `{ line_ranges: [[start, end], ...] }`. Max 300 lines total across all ranges."
 - Respect the 300-line total cap
@@ -146,6 +155,7 @@ For each file returned by Step 2 (up to the number of open suggestion slots):
 ### Step 4 — Deep analysis (v4-pro, medium thinking)
 
 For each set of line ranges from Step 3:
+
 - Send only those extracted lines to v4-pro with the stable system prompt
 - Ask for a structured finding: bug / refactor / doc inconsistency / outdated dep / missing test
 - Write one `suggestion-{date}-{NNN}.md` file per finding
@@ -165,12 +175,14 @@ Compare current `filemtime()` of all scannable files against the timestamps stor
 ### Step 2 — Range scan (v4-flash, non-thinking)
 
 For each changed file:
+
 - Same as Option B Step 3: ask flash for interesting line ranges (max 300 lines total)
 - If flash returns empty ranges → skip the file, log "no interesting ranges found"
 
 ### Step 3 — Deep analysis (v4-pro, medium thinking)
 
 For each set of ranges:
+
 - Send to v4-pro with stable system prompt
 - Write one `review-{date}-{NNN}.md` per finding to `reviews/`
 - If `reviews/` already has 10 files → delete the oldest one first, log deletion
@@ -209,13 +221,32 @@ model: deepseek-v4-pro
 
 ---
 
-## 9. Cache Optimization Strategy
+## 9. Prompt System
 
-DeepSeek caches the **prefix** of a prompt if it is identical across calls. Cache hits cost 1/10 the input token price.
+opensignifo uses a layered prompt system modelled after how Claude Code CLI handles `~/.claude/` and `CLAUDE.md`. All layers are assembled once per project at startup into a single **stable system prompt** that is reused verbatim across all API calls for that project session.
 
-**Rule:** Every API call for a given project starts with an identical stable system prompt. Only the file content appended at the end changes per call.
+### Prompt layers (assembled in this order, top to bottom)
 
-The stable system prompt per project is built once at startup and stored in memory:
+**Layer 1 — Global CLI prompt (always present)**
+`~/.opensignifo/OPENSIGNIFO.md`
+Applies to every project. Contains universal agent behaviour rules, tone, output format constraints, and the agent's core identity. Equivalent to a global `~/.claude/CLAUDE.md`.
+
+**Layer 2 — Project-level override prompt (optional)**
+`~/.opensignifo/projects/{project-name}/context.md`
+Only loaded if the file exists. Contains project-specific custom instructions you want opensignifo to follow for that project — conventions, known quirks, areas to focus or avoid. If absent, this layer is silently skipped.
+
+**Layer 3 — Project root context file (first found wins)**
+Scanned from the project root in this priority order:
+
+| Priority | File | Notes |
+|----------|------|-------|
+| 1st | `CLAUDE.md` | Preferred — written for AI agent context |
+| 2nd | `AGENTS.md` | Common multi-agent convention |
+| 3rd | `GEMINI.md` | Fallback AI context file |
+| 4th | `README.md` or `ARCHITECTURE.md` | Standard repo docs as last resort |
+| 5th | Generic fallback | Hardcoded stack description if none found |
+
+Only the first match is used. The generic fallback reads:
 
 ```
 You are a code quality agent for the project "{name}".
@@ -227,7 +258,23 @@ Do not suggest new features. Focus only on: bugs, refactors,
 documentation inconsistencies, outdated dependencies, and missing/broken tests.
 ```
 
-This prefix is identical for every call within a project → maximizes cache hits. The file content is appended after this prompt every time.
+### Final assembled stable system prompt structure
+
+```
+[~/.opensignifo/OPENSIGNIFO.md]
+
+[~/.opensignifo/projects/{name}/context.md  ← if exists]
+
+[CLAUDE.md / AGENTS.md / GEMINI.md / README.md / generic fallback  ← first found]
+```
+
+This entire block is built once at session start by `PromptBuilder.php` and held in memory. It is passed verbatim as the `system` prompt on every API call for that project.
+
+### Cache behaviour
+
+DeepSeek caches the **exact byte-for-byte prefix** of every prompt. Cache hits cost 1/10 the input token price. Because the stable system prompt is always the same string across all calls within a project session, the cache warms after the first call and stays warm for all subsequent calls.
+
+The cache **invalidates** when any of the three source files change on disk. In practice this is rare — `CLAUDE.md` and `context.md` are slow-changing, human-written files. The cost of a cache miss on the one call after an edit is negligible. The agent does not need to detect or handle this explicitly — DeepSeek re-warms automatically.
 
 ---
 
@@ -275,21 +322,21 @@ Exactly like `php -s localhost:8000` — timestamped, one action per line, alway
 ```
 [10:42:00] opensignifo started. Watching 2 active projects.
 [10:42:00] Budget today: $0.000 / $0.50
-[10:42:01] Project selected: acc-signifocanvas-com (token: 0)
+[10:42:01] Project selected: project-1 (token: 0)
 [10:42:01] suggestions/ has 2 file(s). Running Option B.
 [10:42:02] [B:1] Reviewing existing suggestion: suggestion-2026-04-28-001.md
 [10:42:04] [B:1] suggestion-2026-04-28-001.md → PENDING (keeping)
 [10:42:04] [B:2] Bird's-eye scan via v4-flash...
 [10:42:06] [B:2] 3 files flagged for deep analysis.
-[10:42:06] [B:3] Range scan: app/Controllers/InvoiceController.php
+[10:42:06] [B:3] Range scan: src/Controllers/InvoiceController.php
 [10:42:08] [B:3] Ranges: lines 87-142, 201-230 (85 lines total)
 [10:42:08] [B:4] Deep analysis via v4-pro (medium)...
 [10:42:21] [B:4] Writing ~/.../suggestions/suggestion-2026-04-29-001.md
 [10:42:21] Budget used today: $0.018 / $0.50
 [10:42:21] suggestions/ now full (3 files). Option B complete.
-[10:42:22] maintenance_token for acc-signifocanvas-com → 1
+[10:42:22] maintenance_token for project-1 → 1
 [10:42:22] ---
-[10:42:22] Project selected: inv-signifocanvas-com (token: 0)
+[10:42:22] Project selected: project-2 (token: 0)
 [10:42:22] suggestions/ has 3 file(s). Running Option C.
 [10:42:23] [C:1] Scanning for changed files...
 [10:42:23] [C:1] 2 changed files found.
@@ -298,9 +345,9 @@ Exactly like `php -s localhost:8000` — timestamped, one action per line, alway
 [10:42:25] [C:3] Deep analysis via v4-pro (medium)...
 [10:42:38] [C:3] Writing ~/.../reviews/review-2026-04-29-001.md
 [10:42:38] Budget used today: $0.031 / $0.50
-[10:42:39] maintenance_token for inv-signifocanvas-com → 1
+[10:42:39] maintenance_token for project-2 → 1
 [10:42:39] ---
-[10:43:39] [IDLE] No changed files in acc-signifocanvas-com. Sleeping 60s.
+[10:43:39] [IDLE] No changed files in project-1. Sleeping 60s.
 ```
 
 ---
@@ -308,10 +355,11 @@ Exactly like `php -s localhost:8000` — timestamped, one action per line, alway
 ## 12. Scannable File Types
 
 ```
-*.php  *.js  *.html  *.css  *.json  *.txt  *.neon  *.sh *.sql
+*.php  *.js  *.html  *.css  *.json  *.txt  *.neon  *.sh  *.sql
 ```
 
 Always skip:
+
 - Any path matching root-level `.gitignore` rules
 - The `.opensignifo/` folder itself
 - `node_modules/`, `vendor/` (also typically in .gitignore, but skip unconditionally)
@@ -346,11 +394,12 @@ Call `pcntl_signal_dispatch()` inside the main loop on each iteration to process
 2. `Config.php` + `config.json` — load and validate
 3. `Budget.php` + `budget.json` — budget check before any API calls
 4. `DeepSeekClient.php` — test a single v4-flash call
-5. `GitIgnore.php` + `ProjectScanner.php` — file discovery
-6. `State.php` + `state.json` — mtime tracking
-7. `CycleRouter.php` — B vs C decision
-8. `OptionB.php` — full Option B pipeline
-9. `OptionC.php` — full Option C pipeline
-10. `SuggestionWriter.php` — write/delete suggestion and review files
-11. `main.php` — wire everything into the main loop
-12. `/usr/local/bin/opensignifo` — install the command
+5. `PromptBuilder.php` — assemble and verify the stable system prompt
+6. `GitIgnore.php` + `ProjectScanner.php` — file discovery
+7. `State.php` + `state.json` — mtime tracking
+8. `CycleRouter.php` — B vs C decision
+9. `OptionB.php` — full Option B pipeline
+10. `OptionC.php` — full Option C pipeline
+11. `SuggestionWriter.php` — write/delete suggestion and review files
+12. `main.php` — wire everything into the main loop
+13. `/usr/local/bin/opensignifo` — install the command
