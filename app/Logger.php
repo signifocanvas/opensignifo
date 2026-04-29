@@ -19,5 +19,6 @@ class Logger
     {
         $line = '[' . date('H:i:s') . '] ' . $message . PHP_EOL;
         fwrite(STDOUT, $line);
+        fflush(STDOUT);
     }
 }
