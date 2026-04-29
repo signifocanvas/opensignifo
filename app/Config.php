@@ -21,7 +21,8 @@ class Config
             return self::$config;
         }
 
-        $path = getenv('HOME') . '/.opensignifo/config.json';
+        $home = self::resolveHome();
+        $path = $home . '/.opensignifo/config.json';
 
         if (!file_exists($path)) {
             Logger::log("Config file not found: {$path}");
@@ -45,7 +46,7 @@ class Config
             }
         }
 
-        $config['projects_root'] = str_replace('~', getenv('HOME'), $config['projects_root']);
+        $config['projects_root'] = self::expandTilde($config['projects_root'], $home);
 
         if (!is_array($config['projects'])) {
             Logger::log('Config key "projects" must be an array');
@@ -82,13 +83,23 @@ class Config
      */
     public static function save(array $config): void
     {
-        $path = getenv('HOME') . '/.opensignifo/config.json';
-        $tmp = $path . '.tmp';
+        $home = self::resolveHome();
+        $path = $home . '/.opensignifo/config.json';
+        $tmp  = $path . '.tmp';
 
         $json = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        file_put_contents($tmp, $json);
-        rename($tmp, $path);
 
+        if (file_put_contents($tmp, $json) === false) {
+            Logger::log("Failed to write config tmp file: {$tmp}");
+            exit(1);
+        }
+        if (!rename($tmp, $path)) {
+            Logger::log("Failed to atomically replace config file: {$path}");
+            exit(1);
+        }
+
+        // Keep the cache consistent: store the ~ -expanded version, matching load().
+        $config['projects_root'] = self::expandTilde($config['projects_root'], $home);
         self::$config = $config;
     }
 
@@ -101,5 +112,46 @@ class Config
     {
         $config = self::load();
         return array_values(array_filter($config['projects'], fn($p) => $p['active'] === true));
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Resolve the current user's home directory.
+     * Prefers the HOME env-var; falls back to posix_getpwuid() for environments
+     * where HOME is not set (e.g. some cron / daemon contexts).
+     */
+    private static function resolveHome(): string
+    {
+        $home = getenv('HOME');
+        if ($home !== false && $home !== '') {
+            return rtrim($home, '/');
+        }
+        if (function_exists('posix_getpwuid') && function_exists('posix_getuid')) {
+            $info = posix_getpwuid(posix_getuid());
+            if (isset($info['dir']) && $info['dir'] !== '') {
+                return rtrim($info['dir'], '/');
+            }
+        }
+        Logger::log('Cannot determine home directory (HOME is unset and posix_getpwuid unavailable)');
+        exit(1);
+    }
+
+    /**
+     * Expand a leading "~" or "~/" to the real home directory.
+     * Only the leading tilde is replaced — tildes elsewhere in the path are left
+     * untouched, which is the POSIX-standard behaviour.
+     */
+    private static function expandTilde(string $path, string $home): string
+    {
+        if ($path === '~') {
+            return $home;
+        }
+        if (str_starts_with($path, '~/')) {
+            return $home . substr($path, 1);
+        }
+        return $path;
     }
 }
