@@ -47,6 +47,11 @@ class Budget
      * Written atomically via a .tmp file + rename() so a crash mid-write
      * never leaves a corrupt budget.json.
      *
+     * NOTE: This method performs a read-modify-write without a file lock.
+     * It is safe because the architecture guarantees strictly sequential API
+     * calls (ARCHITECTURE §14 — no parallel execution).  If that invariant
+     * ever relaxes, a flock() around the write pair would be required.
+     *
      * @param float $cost The cost of the API call just completed (USD).
      */
     public static function record(float $cost): void
@@ -59,8 +64,10 @@ class Budget
             $data[$today] = ['spent_usd' => 0.0, 'calls' => 0];
         }
 
-        $data[$today]['spent_usd'] += $cost;
-        $data[$today]['calls']     += 1;
+        // Round to 6 decimal places to prevent floating-point drift over many
+        // small additions (e.g. 1000 × 0.001 can drift away from exactly 1.0).
+        $data[$today]['spent_usd'] = round($data[$today]['spent_usd'] + $cost, 6);
+        $data[$today]['calls']    += 1;
 
         self::writeData($path, $data);
     }
@@ -178,23 +185,10 @@ class Budget
 
     /**
      * Resolve the current user's home directory.
-     * Mirrors the same logic used in Config to avoid coupling the two classes.
+     * Delegates to Env::resolveHome() — the single canonical implementation.
      */
     private static function resolveHome(): string
     {
-        $home = getenv('HOME');
-        if ($home !== false && $home !== '') {
-            return rtrim($home, '/');
-        }
-
-        if (function_exists('posix_getpwuid') && function_exists('posix_getuid')) {
-            $info = posix_getpwuid(posix_getuid());
-            if (isset($info['dir']) && $info['dir'] !== '') {
-                return rtrim($info['dir'], '/');
-            }
-        }
-
-        Logger::log('Cannot determine home directory (HOME is unset and posix_getpwuid unavailable)');
-        exit(1);
+        return Env::resolveHome();
     }
 }

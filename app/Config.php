@@ -120,23 +120,11 @@ class Config
 
     /**
      * Resolve the current user's home directory.
-     * Prefers the HOME env-var; falls back to posix_getpwuid() for environments
-     * where HOME is not set (e.g. some cron / daemon contexts).
+     * Delegates to Env::resolveHome() — the single canonical implementation.
      */
     private static function resolveHome(): string
     {
-        $home = getenv('HOME');
-        if ($home !== false && $home !== '') {
-            return rtrim($home, '/');
-        }
-        if (function_exists('posix_getpwuid') && function_exists('posix_getuid')) {
-            $info = posix_getpwuid(posix_getuid());
-            if (isset($info['dir']) && $info['dir'] !== '') {
-                return rtrim($info['dir'], '/');
-            }
-        }
-        Logger::log('Cannot determine home directory (HOME is unset and posix_getpwuid unavailable)');
-        exit(1);
+        return Env::resolveHome();
     }
 
     /**
